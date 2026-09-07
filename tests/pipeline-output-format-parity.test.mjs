@@ -11,8 +11,8 @@
 // config/profile.example.yml declares for `cv.output_format` to the same
 // destination mode file in both, pins each format to *its own* file rather
 // than to the set of three, pins the promise that the non-default routes skip
-// the PDF whatever the score, and pins the score gate to sit downstream of the
-// routing rather than in front of it.
+// both HTML and the PDF whatever the score, and pins the score gate to sit
+// downstream of the routing rather than in front of it.
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -102,10 +102,20 @@ const guarantee = pipelineRouting
   .split(/(?<=\.)\s/)
   .find((sentence) => /never/i.test(sentence) && /PDF/.test(sentence));
 
-if (guarantee && /latex/.test(guarantee) && /text/.test(guarantee)) {
-  pass('modes/pipeline.md states the latex and text routes never produce a PDF, whatever the score');
+// The promise has to cover HTML as well as the PDF: `text` is markdown only,
+// so a sentence that forbids just the PDF still lets the default route's HTML
+// preview reach a `text` profile. Requiring the word `HTML` anywhere in the
+// sentence is not enough either — "still write the HTML preview but never
+// produce a PDF" contains it and would pass — so pin the negation itself to
+// span both artifacts.
+const coversBoth = Boolean(guarantee) && /never\s+produce[^.]*\bHTML\b[^.]*\bPDF\b/i.test(guarantee);
+
+if (coversBoth && /latex/.test(guarantee) && /text/.test(guarantee)) {
+  pass('modes/pipeline.md states the latex and text routes never produce HTML or a PDF, whatever the score');
 } else {
-  fail('modes/pipeline.md no longer says the latex/text routes skip the PDF regardless of score, so auto_pdf_score_threshold can override cv.output_format');
+  fail(`modes/pipeline.md no longer says the latex/text routes skip both HTML and the PDF regardless of score, so auto_pdf_score_threshold can override cv.output_format (${
+    guarantee ? `found instead: ${guarantee.trim().slice(0, 120)}` : 'no unconditional promise found'
+  })`);
 }
 
 if (formatAt !== -1 && gateAt !== -1 && formatAt < gateAt) {
