@@ -9,8 +9,10 @@
 // The two files are prose read by an agent, not code, so nothing but this
 // check keeps them from drifting again: it pins every value
 // config/profile.example.yml declares for `cv.output_format` to the same
-// destination mode file in both, and pins the score gate to sit downstream of
-// the routing rather than in front of it.
+// destination mode file in both, pins each format to *its own* file rather
+// than to the set of three, pins the promise that the non-default routes skip
+// the PDF whatever the score, and pins the score gate to sit downstream of the
+// routing rather than in front of it.
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -38,35 +40,38 @@ if (declaredFormats.length >= 3 && ['html', 'latex', 'text'].every((f) => declar
 }
 
 // Each non-default value routes to its own mode file; anything else is the
-// default HTML/PDF route.
+// default HTML/PDF route. Asserting only that all three names appear somewhere
+// is too weak: swapping `"latex"` → `modes/text.md` and `"text"` →
+// `modes/latex.md` leaves the same three strings in the file and stays green.
+// Pair each route cue with the destination that follows it instead.
 const routes = [
-  { format: 'latex', mode: 'modes/latex.md' },
-  { format: 'text', mode: 'modes/text.md' },
-  { format: 'html', mode: 'modes/pdf.md' },
+  { label: '"latex"', cue: /"latex"/, mode: 'modes/latex.md' },
+  { label: '"text"', cue: /"text"/, mode: 'modes/text.md' },
+  { label: 'default', cue: /otherwise/i, mode: 'modes/pdf.md' },
 ];
+
+// Where a route lands = the first `modes/<name>.md` after the cue that selects it.
+const targetOf = (block, cue) => {
+  const at = block.search(cue);
+  if (at === -1) return null;
+  return /modes\/[a-z-]+\.md/.exec(block.slice(at))?.[0] ?? null;
+};
+
+const mispairings = (block) => routes
+  .map((route) => ({ ...route, got: targetOf(block, route.cue) }))
+  .filter((route) => route.got !== route.mode)
+  .map((route) => `${route.label} → ${route.got ?? 'nothing'} (expected ${route.mode})`);
 
 // Step 3 of auto-pipeline is the canonical statement of the rule.
 const step3 = autoPipeline.split(/^## Step 3\b/m)[1]?.split(/^## /m)[0] ?? '';
-const missingInStep3 = routes.filter(({ mode }) => !step3.includes(mode));
+const step3Mispaired = mispairings(step3);
 
-if (step3.includes('cv.output_format') && missingInStep3.length === 0) {
-  pass('modes/auto-pipeline.md Step 3 routes cv.output_format to latex.md / text.md / pdf.md');
+if (step3.includes('cv.output_format') && step3Mispaired.length === 0) {
+  pass('modes/auto-pipeline.md Step 3 routes latex → latex.md, text → text.md, default → pdf.md');
 } else {
-  fail(`modes/auto-pipeline.md Step 3 is no longer the routing rule (missing: ${
-    [step3.includes('cv.output_format') ? null : 'cv.output_format', ...missingInStep3.map((r) => r.mode)]
-      .filter(Boolean).join(', ')
-  })`);
-}
-
-// pipeline.md must defer to that rule instead of restating a PDF-only one.
-const missingInPipeline = routes.filter(({ mode }) => !pipeline.includes(mode));
-
-if (pipeline.includes('cv.output_format') && missingInPipeline.length === 0) {
-  pass('modes/pipeline.md routes CV output on cv.output_format and names the same three mode files');
-} else {
-  fail(`modes/pipeline.md ignores cv.output_format when choosing the CV artifact (missing: ${
-    [pipeline.includes('cv.output_format') ? null : 'cv.output_format', ...missingInPipeline.map((r) => r.mode)]
-      .filter(Boolean).join(', ')
+  fail(`modes/auto-pipeline.md Step 3 is no longer the routing rule (${
+    [step3.includes('cv.output_format') ? null : 'missing cv.output_format', ...step3Mispaired]
+      .filter(Boolean).join('; ')
   })`);
 }
 
@@ -74,6 +79,34 @@ if (pipeline.includes('cv.output_format') && missingInPipeline.length === 0) {
 // default HTML route, never override a profile that asked for text or latex.
 const formatAt = pipeline.indexOf('cv.output_format');
 const gateAt = pipeline.indexOf('auto_pdf_score_threshold');
+
+// pipeline.md must defer to that rule instead of restating a PDF-only one. Its
+// routing lives between the first mention of the key and the gate that may only
+// narrow the default route, so that span is what gets checked for pairing.
+const pipelineRouting = formatAt !== -1 && gateAt > formatAt ? pipeline.slice(formatAt, gateAt) : '';
+const pipelineMispaired = mispairings(pipelineRouting);
+
+if (formatAt !== -1 && pipelineMispaired.length === 0) {
+  pass('modes/pipeline.md routes CV output on cv.output_format to the same three mode files');
+} else {
+  fail(`modes/pipeline.md ignores cv.output_format when choosing the CV artifact (${
+    [formatAt === -1 ? 'missing cv.output_format' : null, ...pipelineMispaired]
+      .filter(Boolean).join('; ')
+  })`);
+}
+
+// Ordering alone is only word order. Without an explicit promise, an agent that
+// reads the gate and sees a qualifying score can still hand a `text` profile a
+// PDF, so the non-default routes have to be stated as unconditional.
+const guarantee = pipelineRouting
+  .split(/(?<=\.)\s/)
+  .find((sentence) => /never/i.test(sentence) && /PDF/.test(sentence));
+
+if (guarantee && /latex/.test(guarantee) && /text/.test(guarantee)) {
+  pass('modes/pipeline.md states the latex and text routes never produce a PDF, whatever the score');
+} else {
+  fail('modes/pipeline.md no longer says the latex/text routes skip the PDF regardless of score, so auto_pdf_score_threshold can override cv.output_format');
+}
 
 if (formatAt !== -1 && gateAt !== -1 && formatAt < gateAt) {
   pass('modes/pipeline.md resolves cv.output_format before applying auto_pdf_score_threshold');
