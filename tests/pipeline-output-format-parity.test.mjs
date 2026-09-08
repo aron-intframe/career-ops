@@ -108,13 +108,28 @@ const guarantee = pipelineRouting
 // sentence is not enough either — "still write the HTML preview but never
 // produce a PDF" contains it and would pass — so pin the negation itself to
 // span both artifacts.
-const coversBoth = Boolean(guarantee) && /never\s+produce[^.]*\bHTML\b[^.]*\bPDF\b/i.test(guarantee);
+//
+// Spanning both artifacts is still not the whole promise. "never produce HTML
+// or a PDF below the threshold" spans both and inverts the fix: under the gate
+// the routes are honoured, over it the artifacts come back, which is #3910
+// through the same door. So the promise also has to be stated as independent
+// of the score and must carry no qualifier that makes it conditional on one.
+// Both checks read the promise clause only (from `never` to the em dash that
+// starts the tracker instruction), so wording downstream of it — "mark PDF ❌
+// … only in the tracker" — cannot redden this by accident.
+const promise = guarantee ? guarantee.slice(guarantee.search(/never/i)).split(/\s[—–-]\s/)[0] : '';
+const CONDITIONAL = /\b(?:below|under|above|over|beneath|when|if|unless|only|threshold)\b/i;
+const SCORE_INDEPENDENT = /\b(?:whatever|regardless of|no matter|independent of)\s+(?:the\s+)?score\b/i;
 
-if (coversBoth && /latex/.test(guarantee) && /text/.test(guarantee)) {
+const coversBoth = /never\s+produce[^.]*\bHTML\b[^.]*\bPDF\b/i.test(promise);
+const unconditional = coversBoth && !CONDITIONAL.test(promise) && SCORE_INDEPENDENT.test(promise);
+
+if (unconditional && /latex/.test(guarantee) && /text/.test(guarantee)) {
   pass('modes/pipeline.md states the latex and text routes never produce HTML or a PDF, whatever the score');
 } else {
   fail(`modes/pipeline.md no longer says the latex/text routes skip both HTML and the PDF regardless of score, so auto_pdf_score_threshold can override cv.output_format (${
-    guarantee ? `found instead: ${guarantee.trim().slice(0, 120)}` : 'no unconditional promise found'
+    !guarantee ? 'no unconditional promise found'
+      : `${coversBoth ? 'promise is conditional on the score' : 'promise does not span both HTML and the PDF'}, found instead: ${promise.trim().slice(0, 120)}`
   })`);
 }
 
